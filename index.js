@@ -30,7 +30,8 @@ async function run() {
     await client.connect();
 
     const database = client.db("aligntask_db")
-    const tasksCollection = database.collection("tasks");
+    const tasksCollection = database.collection("tasks")
+    const proposalsCollection = database.collection("proposals")
   //for getting task
   app.get("/tasks", async (req, res) => {
   try {
@@ -38,7 +39,7 @@ async function run() {
 
     const filter = userId ? { userId } : {};
 
-    const tasks = await database.collection("tasks").find(filter).toArray();
+    const tasks = await tasksCollection.find(filter).toArray();
 
     res.json(tasks);
   } catch (err) {
@@ -53,61 +54,23 @@ async function run() {
     if (!title || !category || !description || !budget || !deadline) {
       return res.status(400).json({ error: "All fields are required" });
     }
-//updating tasks
-app.patch("/tasks/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
 
-    const task = await tasksCollection.findOne({
-      _id: new ObjectId(id),
-    });
+   const newTask = {
+  title,
+  category,
+  description,
+  budget: Number(budget),
+  deadline,
 
-    if (!task) {
-      return res.status(404).json({
-        error: "Task not found",
-      });
-    }
+  userId,
+  clientName: req.body.clientName,
+  clientEmail: req.body.clientEmail,
 
-    if (task.status !== "open") {
-      return res.status(400).json({
-        error: "Only open tasks can be edited",
-      });
-    }
+  status: "open",
+  createdAt: new Date(),
+};
 
-    const updatedTask = {
-      $set: {
-        title: req.body.title,
-        category: req.body.category,
-        description: req.body.description,
-        budget: Number(req.body.budget),
-        deadline: req.body.deadline,
-      },
-    };
-
-    const result = await tasksCollection.updateOne(
-      { _id: new ObjectId(id) },
-      updatedTask
-    );
-
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({
-      error: err.message,
-    });
-  }
-});
-    const newTask = {
-      title,
-      category,
-      description,
-      budget: Number(budget),
-      deadline,
-      userId,
-      status: "open", // IMPORTANT DEFAULT RULE
-      createdAt: new Date(),
-    };
-
-    const result = await database.collection("tasks").insertOne(newTask);
+    const result = await tasksCollection.insertOne(newTask);
 
     res.status(201).json({
       success: true,
@@ -134,9 +97,15 @@ app.delete("/tasks/:id", async (req, res) => {
       });
     }
 
-    const result = await tasksCollection.deleteOne({
-      _id: new ObjectId(id),
-    });
+   if (task.status !== "open") {
+  return res.status(400).json({
+    error: "Only open tasks can be deleted",
+  });
+}
+
+const result = await tasksCollection.deleteOne({
+  _id: new ObjectId(id),
+});
 
     res.json(result);
   } catch (err) {
@@ -146,6 +115,193 @@ app.delete("/tasks/:id", async (req, res) => {
   }
 });
 
+
+//updating tasks
+app.patch("/tasks/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+const task = await tasksCollection.findOne({
+  _id: new ObjectId(id),
+});
+
+if (!task) {
+  return res.status(404).json({
+    error: "Task not found",
+  });
+}
+
+if (task.status !== "open") {
+  return res.status(400).json({
+    error: "Only open tasks can be edited",
+  });
+}
+    const result = await tasksCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          title: req.body.title,
+          category: req.body.category,
+          description: req.body.description,
+          budget: Number(req.body.budget),
+          deadline: req.body.deadline,
+        },
+      }
+    );
+
+    res.json({
+      success: true,
+      result,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+//browsing tasks
+app.get("/browse-tasks", async (req, res) => {
+  const tasks = await tasksCollection
+    .find({ status: "open" })
+    .toArray();
+
+  res.json(tasks);
+});
+//posting proposals 
+app.post("/proposals", async (req, res) => {
+  try {
+    const {
+      taskId,
+      freelancerId,
+      freelancerEmail,
+      budget,
+      deliveryDate,
+      message,
+    } = req.body;
+
+    // 1. prevent duplicate proposal
+    const existing = await proposalsCollection.findOne({
+      taskId,
+      freelancerId,
+    });
+
+    if (existing) {
+      return res.status(400).json({
+        error: "You already submitted a proposal",
+      });
+    }
+if (!freelancerId || !freelancerEmail) {
+  return res.status(403).json({
+    error: "Only freelancers can apply",
+  });
+}
+   const proposal = {
+  taskId,
+  freelancerId,
+  freelancerEmail,
+  budget: Number(budget),
+
+  deliveryDate: new Date(deliveryDate),
+
+  message,
+  status: "pending",
+  createdAt: new Date(),
+};
+    const result = await proposalsCollection.insertOne(proposal);
+
+    res.json({
+      success: true,
+      insertedId: result.insertedId,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+//get proposals
+app.get("/proposals/:taskId", async (req, res) => {
+  try {
+    const proposals = await proposalsCollection
+      .find({ taskId: req.params.taskId })
+      .toArray();
+
+    res.json(proposals);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+//accepting and rejecting proposals
+app.patch("/proposals/accept/:id", async (req, res) => {
+  try {
+    const proposalId = req.params.id;
+
+    const proposal = await proposalsCollection.findOne({
+      _id: new ObjectId(proposalId),
+    });
+
+    if (!proposal) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    // 1. mark accepted
+    await proposalsCollection.updateOne(
+      { _id: new ObjectId(proposalId) },
+      { $set: { status: "accepted" } }
+    );
+
+    // 2. reject all others for same task
+    await proposalsCollection.updateMany(
+      {
+        taskId: proposal.taskId,
+        _id: { $ne: new ObjectId(proposalId) },
+      },
+      { $set: { status: "rejected" } }
+    );
+
+    // 3. update task status
+    await tasksCollection.updateOne(
+      { _id: new ObjectId(proposal.taskId) },
+      {
+        $set: {
+          status: "in progress",
+          acceptedProposalId: proposalId,
+        },
+      }
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+//rejecting proposals
+app.patch("/proposals/reject/:id", async (req, res) => {
+  await proposalsCollection.updateOne(
+    { _id: new ObjectId(req.params.id) },
+    { $set: { status: "rejected" } }
+  );
+
+  res.json({ success: true });
+});
+
+//getting tasks details
+app.get("/tasks/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const task = await tasksCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!task) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
