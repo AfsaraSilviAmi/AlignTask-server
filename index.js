@@ -5,7 +5,7 @@ require('dotenv').config()
 const port = 5000
 
 
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 app.use(cors());
 app.use(express.json());
 app.get('/', (req, res) => {
@@ -53,7 +53,49 @@ async function run() {
     if (!title || !category || !description || !budget || !deadline) {
       return res.status(400).json({ error: "All fields are required" });
     }
+//updating tasks
+app.patch("/tasks/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
 
+    const task = await tasksCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!task) {
+      return res.status(404).json({
+        error: "Task not found",
+      });
+    }
+
+    if (task.status !== "open") {
+      return res.status(400).json({
+        error: "Only open tasks can be edited",
+      });
+    }
+
+    const updatedTask = {
+      $set: {
+        title: req.body.title,
+        category: req.body.category,
+        description: req.body.description,
+        budget: Number(req.body.budget),
+        deadline: req.body.deadline,
+      },
+    };
+
+    const result = await tasksCollection.updateOne(
+      { _id: new ObjectId(id) },
+      updatedTask
+    );
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
     const newTask = {
       title,
       category,
@@ -74,6 +116,33 @@ async function run() {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+//delete tasks
+app.delete("/tasks/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const task = await tasksCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!task) {
+      return res.status(404).json({
+        error: "Task not found",
+      });
+    }
+
+    const result = await tasksCollection.deleteOne({
+      _id: new ObjectId(id),
+    });
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
