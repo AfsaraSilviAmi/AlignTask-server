@@ -1,9 +1,10 @@
 const express = require('express');
 const cors = require("cors");
+const Stripe = require("stripe");
 const app = express()
 require('dotenv').config()
 const port = 5000
-
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 app.use(cors());
@@ -32,6 +33,7 @@ async function run() {
     const database = client.db("aligntask_db")
     const tasksCollection = database.collection("tasks")
     const proposalsCollection = database.collection("proposals")
+    const paymentsCollection = database.collection("payments")
   //for getting task
   app.get("/tasks", async (req, res) => {
   try {
@@ -169,15 +171,15 @@ app.get("/browse-tasks", async (req, res) => {
 //posting proposals 
 app.post("/proposals", async (req, res) => {
   try {
-    const {
-      taskId,
-      freelancerId,
-      freelancerEmail,
-      budget,
-      deliveryDate,
-      message,
-    } = req.body;
-
+   const {
+  taskId,
+  freelancerId,
+  freelancerName,
+  freelancerEmail,
+  budget,
+  deliveryDate,
+  message,
+} = req.body;
     // 1. prevent duplicate proposal
     const existing = await proposalsCollection.findOne({
       taskId,
@@ -198,6 +200,7 @@ if (!freelancerId || !freelancerEmail) {
   taskId,
   freelancerId,
   freelancerEmail,
+   freelancerName,
   budget: Number(budget),
 
   deliveryDate: new Date(deliveryDate),
@@ -243,13 +246,21 @@ app.patch("/proposals/accept/:id", async (req, res) => {
       return res.status(404).json({ error: "Not found" });
     }
 
-    // 1. mark accepted
+    const task = await tasksCollection.findOne({
+      _id: new ObjectId(proposal.taskId),
+    });
+
+    if (!task) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    // 1. mark accepted proposal
     await proposalsCollection.updateOne(
       { _id: new ObjectId(proposalId) },
       { $set: { status: "accepted" } }
     );
 
-    // 2. reject all others for same task
+    // 2. reject all others
     await proposalsCollection.updateMany(
       {
         taskId: proposal.taskId,
@@ -258,7 +269,7 @@ app.patch("/proposals/accept/:id", async (req, res) => {
       { $set: { status: "rejected" } }
     );
 
-    // 3. update task status
+    // 3. update task
     await tasksCollection.updateOne(
       { _id: new ObjectId(proposal.taskId) },
       {
@@ -268,6 +279,24 @@ app.patch("/proposals/accept/:id", async (req, res) => {
         },
       }
     );
+
+    // 4. SAVE PAYMENT RECORD (NEW PART)
+    await paymentsCollection.insertOne({
+      proposalId: proposalId,
+      taskId: proposal.taskId,
+
+      clientEmail: task.clientEmail || task.userId,
+
+      freelancerId: proposal.freelancerId,
+      freelancerName: proposal.freelancerName,
+      freelancerEmail: proposal.freelancerEmail,
+
+      amount: proposal.budget,
+
+      paymentStatus: "paid",
+
+      createdAt: new Date(),
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -300,6 +329,78 @@ app.get("/tasks/:id", async (req, res) => {
     res.json(task);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+//for payment/checkout
+app.post("/create-checkout-session", async (req, res) => {
+  try {
+    const { proposalId, amount } = req.body;
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+
+      mode: "payment",
+
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: "Freelancer Project Payment",
+            },
+            unit_amount: amount * 100,
+          },
+          quantity: 1,
+        },
+      ],
+
+      success_url:
+        `${process.env.CLIENT_URL}/payment/success?proposalId=${proposalId}`,
+
+      cancel_url:
+        `${process.env.CLIENT_URL}/payment/cancel`,
+    });
+
+    res.json({
+      url: session.url,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+
+//get payment for admin
+app.get("/payments", async (req, res) => {
+  try {
+    const payments = await paymentsCollection
+      .find()
+      .sort({ paidAt: -1 })
+      .toArray();
+
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+//earning page for freelancer
+app.get("/payments/freelancer/:email", async (req, res) => {
+  try {
+    const payments = await paymentsCollection
+      .find({
+        freelancerEmail: req.params.email,
+      })
+      .toArray();
+
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
     // Send a ping to confirm a successful connection
