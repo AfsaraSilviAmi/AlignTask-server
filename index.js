@@ -7,6 +7,7 @@ const port = 5000
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const { createRemoteJWKSet, jwtVerify } = require('jose-cjs');
 app.use(cors());
 app.use(express.json());
 app.get('/', (req, res) => {
@@ -24,6 +25,40 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`)
+)
+const requireAuth = async(req, res, next) =>{
+  const authHeader = req?.headers.authorization
+   if(!authHeader){
+    return res.status(401).json({message: "Unauthorized"})
+  }
+
+  const token = authHeader.split(" ")[1]
+  if(!token){
+    return res.status(401).json({message: "Unauthorized"})
+  }
+  try{
+    const {payload} = await jwtVerify(token, JWKS)
+     req.user = payload;
+    next()
+  }catch(error){
+    return res.status(403).json({message: "Forbidden"})
+
+  }
+
+}
+const requireAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ message: "Admin only" });
+  }
+
+  next();
+};
 
 async function run() {
   try {
@@ -35,6 +70,8 @@ async function run() {
     const proposalsCollection = database.collection("proposals")
     const paymentsCollection = database.collection("payments")
     const usersCollection = database.collection("user");
+
+    
   //for getting task
   app.get("/tasks", async (req, res) => {
   try {
@@ -220,7 +257,51 @@ if (!freelancerId || !freelancerEmail) {
     res.status(500).json({ error: err.message });
   }
 });
+//client-stats
+app.get("/client/stats/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
 
+    const tasks = await tasksCollection
+      .find({ clientEmail: email })
+      .toArray();
+
+    const totalTasks = tasks.length;
+
+    const openTasks = tasks.filter(
+      (task) => task.status === "open"
+    ).length;
+
+    const inProgressTasks = tasks.filter(
+      (task) => task.status === "in progress"
+    ).length;
+
+    const completedTasks = tasks.filter(
+      (task) => task.status === "completed"
+    ).length;
+
+    const payments = await paymentsCollection
+      .find({ clientEmail: email })
+      .toArray();
+
+    const totalSpent = payments.reduce(
+      (sum, payment) => sum + Number(payment.amount || 0),
+      0
+    );
+
+    res.json({
+      totalTasks,
+      openTasks,
+      inProgressTasks,
+      completedTasks,
+      totalSpent,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
 //get proposals
 app.get("/proposals/:taskId", async (req, res) => {
   try {
@@ -419,13 +500,18 @@ app.post("/confirm-session", async (req, res) => {
     );
 
     // save payment
-    await paymentsCollection.insertOne({
-      proposalId,
-      taskTitle: task.title,
-      freelancerName: proposal.freelancerName,
-      amount: proposal.budget,
-      paidAt: new Date(),
-    });
+   await paymentsCollection.insertOne({
+  proposalId,
+  taskTitle: task.title,
+
+  freelancerName: proposal.freelancerName,
+  freelancerEmail: proposal.freelancerEmail, // ✅ ADD THIS
+
+  clientEmail: task.clientEmail, // optional but useful
+
+  amount: proposal.budget,
+  paidAt: new Date(),
+});
 
     res.json({
       success: true,
@@ -591,17 +677,26 @@ app.patch("/users/profile/:email", async (req, res) => {
   try {
     const email = req.params.email;
 
-   const update = {
-  name: req.body.name,
-  image: req.body.photo,   // keep frontend name, but save into image
-  skills: req.body.skills, // now array
-  bio: req.body.bio,
-  hourlyRate: req.body.hourlyRate,
-};
+    const update = {
+      name: req.body.name,
+      image: req.body.photo,
+      skills: req.body.skills,
+      bio: req.body.bio,
+      hourlyRate: req.body.hourlyRate,
+    };
+
     await usersCollection.updateOne(
       { email },
-      { $set: update },
-      { upsert: true }
+      {
+        $set: update,
+        $setOnInsert: {
+          email,
+          role: "client",      // default role (important)
+          blocked: false,      // ✅ ALWAYS ADDED
+          createdAt: new Date()
+        }
+      },
+      { upsert: true } // ✅ THIS IS THE MISSING PIECE
     );
 
     res.json({ success: true });
@@ -652,6 +747,105 @@ app.get("/freelancers/:id", async (req, res) => {
       error: err.message,
     });
   }
+});
+
+//ensuring users get block feild 
+app.post("/users/ensure", async (req, res) => {
+  try {
+    const { email, name, image, role } = req.body;
+
+    await usersCollection.updateOne(
+      { email },
+      {
+        $setOnInsert: {
+          email,
+          name,
+          image,
+          role: role || "client",
+          blocked: false,
+          createdAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+//admin stats 
+app.get("/admin/stats", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const totalUsers = await usersCollection.countDocuments();
+    const totalTasks = await tasksCollection.countDocuments();
+
+    const payments = await paymentsCollection.find().toArray();
+
+    const totalRevenue = payments.reduce(
+      (sum, p) => sum + Number(p.amount || 0),
+      0
+    );
+
+    const activeTasks = await tasksCollection.countDocuments({
+      status: { $in: ["open", "in progress", "awaiting_payment"] },
+    });
+
+    res.json({
+      totalUsers,
+      totalTasks,
+      totalRevenue,
+      activeTasks,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+//get users for admin
+app.get("/admin/users", requireAuth, requireAdmin, async (req, res) => {
+  const users = await usersCollection.find().toArray();
+  res.json(users);
+});
+//block users
+app.patch("/admin/users/block/:id", requireAuth, requireAdmin, async (req, res) => {
+  await usersCollection.updateOne(
+    { _id: new ObjectId(req.params.id) },
+    { $set: { blocked: true } }
+  );
+
+  res.json({ success: true });
+});
+//unblock users
+app.patch("/admin/users/unblock/:id", requireAuth, requireAdmin, async (req, res) => {
+  await usersCollection.updateOne(
+    { _id: new ObjectId(req.params.id) },
+    { $set: { blocked: false } }
+  );
+
+  res.json({ success: true });
+});
+//get all tasks for admin
+app.get("/admin/tasks", requireAuth, requireAdmin, async (req, res) => {
+  const tasks = await tasksCollection.find().toArray();
+  res.json(tasks);
+});
+//delete tasks by admin
+app.delete("/admin/tasks/:id", requireAuth, requireAdmin, async (req, res) => {
+  await tasksCollection.deleteOne({
+    _id: new ObjectId(req.params.id),
+  });
+
+  res.json({ success: true });
+});
+//admin payment 
+app.get("/admin/payments", requireAuth, requireAdmin, async (req, res) => {
+  const payments = await paymentsCollection
+    .find()
+    .sort({ paidAt: -1 })
+    .toArray();
+
+  res.json(payments);
 });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
