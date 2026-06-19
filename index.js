@@ -617,6 +617,42 @@ app.get("/users/profile/:email", async (req, res) => {
 
   res.json(user || {});
 });
+
+//getting all freelancers
+app.get("/freelancers", async (req, res) => {
+  try {
+    const freelancers = await usersCollection
+      .find({ role: "freelancer" })
+      .toArray();
+
+    res.json(freelancers);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+//get single freelancer
+app.get("/freelancers/:id", async (req, res) => {
+  try {
+    const freelancer = await usersCollection.findOne({
+      _id: new ObjectId(req.params.id),
+      role: "freelancer",
+    });
+
+    if (!freelancer) {
+      return res.status(404).json({
+        error: "Freelancer not found",
+      });
+    }
+
+    res.json(freelancer);
+  } catch (err) {
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
