@@ -582,13 +582,52 @@ app.get("/freelancer/stats/:email", async (req, res) => {
       (sum, p) => sum + Number(p.amount || 0),
       0
     );
+const allMonths = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 
-    res.json({
-      totalProposals: total,
-      pendingProposals: pending,
-      acceptedProposals: accepted,
-      totalEarnings,
-    });
+const currentMonth = new Date().getMonth(); // June = 5
+
+const months = allMonths.slice(0, currentMonth + 1);
+
+const monthlyEarnings = {};
+
+earnings.forEach((payment) => {
+  const month = new Date(payment.paidAt).toLocaleString(
+    "default",
+    {
+      month: "short",
+    }
+  );
+
+  monthlyEarnings[month] =
+    (monthlyEarnings[month] || 0) +
+    Number(payment.amount);
+});
+
+const chartData = months.map((month) => ({
+  month,
+  earnings: monthlyEarnings[month] || 0,
+}));
+
+   res.json({
+  totalProposals: total,
+  pendingProposals: pending,
+  acceptedProposals: accepted,
+  totalEarnings,
+  chartData,
+});
 
   } catch (err) {
     res.status(500).json({ error: err.message });
