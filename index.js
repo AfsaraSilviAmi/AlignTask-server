@@ -209,13 +209,14 @@ app.get("/browse-tasks", async (req, res) => {
 //posting proposals 
 app.post("/proposals", async (req, res) => {
   try {
-   const {
+  const {
   taskId,
+  taskTitle,
   freelancerId,
   freelancerName,
   freelancerEmail,
   budget,
-  deliveryDate,
+  estimatedDays,
   message,
 } = req.body;
     // 1. prevent duplicate proposal
@@ -236,15 +237,20 @@ if (!freelancerId || !freelancerEmail) {
 }
    const proposal = {
   taskId,
+  taskTitle,
+
   freelancerId,
   freelancerEmail,
-   freelancerName,
+  freelancerName,
+
   budget: Number(budget),
 
-  deliveryDate: new Date(deliveryDate),
+  estimatedDays: Number(estimatedDays),
 
   message,
+
   status: "pending",
+
   createdAt: new Date(),
 };
     const result = await proposalsCollection.insertOne(proposal);
