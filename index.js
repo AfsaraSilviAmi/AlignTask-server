@@ -119,6 +119,71 @@ async function run() {
     res.status(500).json({ error: err.message });
   }
 });
+
+//for getting featured task
+// homepage featured tasks (LATEST OPEN TASKS)
+app.get("/featured-tasks", async (req, res) => {
+  try {
+    const tasks = await tasksCollection
+      .find({ status: "open" })
+      .sort({ createdAt: -1 })
+      .limit(6) // only show 6 tasks on homepage
+      .toArray();
+
+    res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/top-freelancers", async (req, res) => {
+  try {
+    const freelancers = await usersCollection
+      .find({ role: "freelancer" })
+      .toArray();
+
+    // get all completed tasks/payments for stats
+    const payments = await paymentsCollection.find().toArray();
+
+    const proposals = await proposalsCollection.find().toArray();
+
+    const enriched = freelancers.map((user) => {
+      const email = user.email;
+
+      // finished jobs = accepted + paid tasks
+      const finishedJobs = payments.filter(
+        (p) => p.freelancerEmail === email
+      ).length;
+
+      // average rating placeholder (you can replace later with real ratings)
+    const avgRating =
+  typeof user.rating === "number"
+    ? user.rating
+    : Number((4 + Math.random()).toFixed(1));
+
+      return {
+        ...user,
+        finishedJobs,
+        avgRating,
+      };
+    });
+
+    // sort by performance (jobs + rating)
+ enriched.sort((a, b) => {
+  const ratingA = Number(a.avgRating);
+  const ratingB = Number(b.avgRating);
+
+  const scoreA = a.finishedJobs * 2 + ratingA;
+  const scoreB = b.finishedJobs * 2 + ratingB;
+
+  return scoreB - scoreA;
+});
+
+    res.json(enriched.slice(0, 3)); // top 3 freelancers
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
     //for posting tasks
     app.post("/tasks", async (req, res) => {
   try {
@@ -1002,7 +1067,11 @@ const revenueChart = months.map((month) => ({
 );
 //get users for admin
 app.get("/admin/users", requireAuth, requireAdmin, async (req, res) => {
-  const users = await usersCollection.find().toArray();
+  const users = await usersCollection
+    .find()
+    .sort({ createdAt: -1 }) 
+    .toArray();
+
   res.json(users);
 });
 //block users
@@ -1025,7 +1094,11 @@ app.patch("/admin/users/unblock/:id", requireAuth, requireAdmin, async (req, res
 });
 //get all tasks for admin
 app.get("/admin/tasks", requireAuth, requireAdmin, async (req, res) => {
-  const tasks = await tasksCollection.find().toArray();
+  const tasks = await tasksCollection
+    .find()
+    .sort({ createdAt: -1 }) 
+    .toArray();
+
   res.json(tasks);
 });
 //delete tasks by admin
