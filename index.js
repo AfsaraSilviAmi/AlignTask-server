@@ -28,26 +28,7 @@ const client = new MongoClient(uri, {
 const JWKS = createRemoteJWKSet(
   new URL(`${process.env.CLIENT_URL}/api/auth/jwks`)
 )
-const requireAuth = async(req, res, next) =>{
-  const authHeader = req?.headers.authorization
-   if(!authHeader){
-    return res.status(401).json({message: "Unauthorized"})
-  }
 
-  const token = authHeader.split(" ")[1]
-  if(!token){
-    return res.status(401).json({message: "Unauthorized"})
-  }
-  try{
-    const {payload} = await jwtVerify(token, JWKS)
-     req.user = payload;
-    next()
-  }catch(error){
-    return res.status(403).json({message: "Forbidden"})
-
-  }
-
-}
 const requireAdmin = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -71,6 +52,55 @@ async function run() {
     const paymentsCollection = database.collection("payments")
     const usersCollection = database.collection("user");
 
+    const requireAuth = async (req, res, next) => {
+  const authHeader = req?.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({
+      message: "Unauthorized",
+    });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({
+      message: "Unauthorized",
+    });
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+
+    const user = await usersCollection.findOne({
+      email: payload.email,
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (user?.blocked) {
+      return res.status(403).json({
+        message: "Account blocked",
+      });
+    }
+
+    req.user = {
+      ...payload,
+      role: user.role,
+    };
+
+    next();
+  } catch (error) {
+    return res.status(403).json({
+      message: "Forbidden",
+    });
+  }
+};
+
     
   //for getting task
   app.get("/tasks", async (req, res) => {
@@ -79,7 +109,10 @@ async function run() {
 
     const filter = userId ? { userId } : {};
 
-    const tasks = await tasksCollection.find(filter).toArray();
+    const tasks = await tasksCollection
+      .find(filter)
+      .sort({ createdAt: -1 })   // 🔥 NEWEST FIRST
+      .toArray();
 
     res.json(tasks);
   } catch (err) {
@@ -103,7 +136,7 @@ async function run() {
   deadline,
 
   userId,
-  clientName: req.body.clientName,
+    clientName: req.body.clientName,
   clientEmail: req.body.clientEmail,
 
   status: "open",
@@ -202,6 +235,7 @@ if (task.status !== "open") {
 app.get("/browse-tasks", async (req, res) => {
   const tasks = await tasksCollection
     .find({ status: "open" })
+    .sort({ createdAt: -1 })   // 🔥 ADD THIS
     .toArray();
 
   res.json(tasks);
@@ -410,7 +444,21 @@ app.patch("/proposals/reject/:id", async (req, res) => {
 
   res.json({ success: true });
 });
+//my proposals
+app.get(
+  "/proposals/my-proposals",
+  requireAuth,
+  async (req, res) => {
+    const proposals = await proposalsCollection
+      .find({
+        freelancerEmail: req.user.email,
+      })
+      .sort({ createdAt: -1 })
+      .toArray();
 
+    res.json(proposals);
+  }
+);
 //getting tasks details
 app.get("/tasks/:id", async (req, res) => {
   try {
@@ -512,7 +560,7 @@ app.post("/confirm-session", async (req, res) => {
 
   freelancerName: proposal.freelancerName,
   freelancerEmail: proposal.freelancerEmail, // ✅ ADD THIS
-
+ clientName: task.clientName,
   clientEmail: task.clientEmail, // optional but useful
 
   amount: proposal.budget,
@@ -548,9 +596,8 @@ app.get("/payments", async (req, res) => {
 app.get("/payments/freelancer/:email", async (req, res) => {
   try {
     const payments = await paymentsCollection
-      .find({
-        freelancerEmail: req.params.email,
-      })
+      .find({ freelancerEmail: req.params.email })
+      .sort({ paidAt: -1 }) 
       .toArray();
 
     res.json(payments);
@@ -637,7 +684,10 @@ const chartData = months.map((month) => ({
 //get freelancer proposal
 app.get("/proposals/freelancer/:email", async (req, res) => {
   const proposals = await proposalsCollection
-    .find({ freelancerEmail: req.params.email })
+    .find({
+      freelancerEmail: req.params.email,
+    })
+    .sort({ createdAt: -1 })
     .toArray();
 
   res.json(proposals);
@@ -648,25 +698,34 @@ app.get("/freelancer/active-projects/:email", async (req, res) => {
   try {
     const email = req.params.email;
 
-    // 1. find accepted proposals of this freelancer
-    const proposals = await proposalsCollection
-      .find({
-        freelancerEmail: email,
-        status: "accepted",
-      })
-      .toArray();
+    // 1. get accepted proposals
+    const proposals = await proposalsCollection.find({
+      freelancerEmail: email,
+      status: "accepted",
+    }).toArray();
 
+    // 2. get task ids
     const taskIds = proposals.map(p => new ObjectId(p.taskId));
 
-    // 2. get tasks that are in progress
-    const tasks = await tasksCollection
-      .find({
-        _id: { $in: taskIds },
-        status: "in progress",
-      })
-      .toArray();
+    // 3. get tasks
+    const tasks = await tasksCollection.find({
+      _id: { $in: taskIds },
+      status: { $in: ["in progress", "completed"] },
+    }).toArray();
 
-    res.json(tasks);
+    // 4. MERGE proposal budget into task
+    const merged = tasks.map(task => {
+      const proposal = proposals.find(
+        p => p.taskId === task._id.toString()
+      );
+
+      return {
+        ...task,
+        freelancerBudget: proposal?.budget || 0, // ✅ THIS IS THE KEY FIX
+      };
+    });
+
+    res.json(merged);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -891,6 +950,16 @@ app.get("/admin/payments", requireAuth, requireAdmin, async (req, res) => {
     .toArray();
 
   res.json(payments);
+});
+//trying to block the user
+app.get("/users/status/:email", async (req, res) => {
+  const user = await usersCollection.findOne({
+    email: req.params.email,
+  });
+
+  res.json({
+    blocked: user?.blocked || false,
+  });
 });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
