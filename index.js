@@ -880,32 +880,126 @@ app.post("/users/ensure", async (req, res) => {
 });
 
 //admin stats 
-app.get("/admin/stats", requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const totalUsers = await usersCollection.countDocuments();
-    const totalTasks = await tasksCollection.countDocuments();
+app.get(
+  "/admin/stats",
+  requireAuth,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const totalUsers =
+        await usersCollection.countDocuments();
 
-    const payments = await paymentsCollection.find().toArray();
+      const totalTasks =
+        await tasksCollection.countDocuments();
 
-    const totalRevenue = payments.reduce(
-      (sum, p) => sum + Number(p.amount || 0),
-      0
-    );
+      const activeTasks =
+        await tasksCollection.countDocuments({
+          status: {
+            $in: [
+              "open",
+              "in progress",
+              "awaiting_payment",
+            ],
+          },
+        });
 
-    const activeTasks = await tasksCollection.countDocuments({
-      status: { $in: ["open", "in progress", "awaiting_payment"] },
-    });
+      const payments =
+        await paymentsCollection.find().toArray();
 
-    res.json({
-      totalUsers,
-      totalTasks,
-      totalRevenue,
-      activeTasks,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+      const totalRevenue = payments.reduce(
+        (sum, p) =>
+          sum + Number(p.amount || 0),
+        0
+      );
+
+      // Revenue Chart
+    // Revenue Chart (Month Wise)
+
+const allMonths = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const currentMonth = new Date().getMonth();
+
+const months = allMonths.slice(0, currentMonth + 1);
+
+const monthlyRevenue = {};
+
+payments.forEach((payment) => {
+  const month = new Date(payment.paidAt).toLocaleString(
+    "default",
+    {
+      month: "short",
+    }
+  );
+
+  monthlyRevenue[month] =
+    (monthlyRevenue[month] || 0) +
+    Number(payment.amount || 0);
 });
+
+const revenueChart = months.map((month) => ({
+  name: month,
+  value: monthlyRevenue[month] || 0,
+}));
+
+      // Task Status Chart
+      const openTasks =
+        await tasksCollection.countDocuments({
+          status: "open",
+        });
+
+      const inProgressTasks =
+        await tasksCollection.countDocuments({
+          status: "in progress",
+        });
+
+      const completedTasks =
+        await tasksCollection.countDocuments({
+          status: "completed",
+        });
+
+      const taskChart = [
+        {
+          name: "Open",
+          value: openTasks,
+        },
+        {
+          name: "In Progress",
+          value: inProgressTasks,
+        },
+        {
+          name: "Completed",
+          value: completedTasks,
+        },
+      ];
+
+      res.json({
+        totalUsers,
+        totalTasks,
+        totalRevenue,
+        activeTasks,
+        revenueChart,
+        taskChart,
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err.message,
+      });
+    }
+  }
+);
 //get users for admin
 app.get("/admin/users", requireAuth, requireAdmin, async (req, res) => {
   const users = await usersCollection.find().toArray();
