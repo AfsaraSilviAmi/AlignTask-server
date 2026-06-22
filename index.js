@@ -195,7 +195,7 @@ app.get("/top-freelancers", async (req, res) => {
 
    const newTask = {
   title,
-  category,
+   category: category.trim(), 
   description,
   budget: Number(budget),
   deadline,
@@ -298,12 +298,45 @@ if (task.status !== "open") {
 });
 //browsing tasks
 app.get("/browse-tasks", async (req, res) => {
-  const tasks = await tasksCollection
-    .find({ status: "open" })
-    .sort({ createdAt: -1 })   // 🔥 ADD THIS
-    .toArray();
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 9;
+    const search = req.query.search || "";
+    const category = req.query.category || "All";
 
-  res.json(tasks);
+    const skip = (page - 1) * limit;
+
+    // 🔥 build filter
+    const filter = {
+      status: "open",
+    };
+
+    if (search) {
+      filter.title = { $regex: search, $options: "i" };
+    }
+
+    if (category !== "All") {
+      filter.category = category;
+    }
+
+    const total = await tasksCollection.countDocuments(filter);
+
+    const tasks = await tasksCollection
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+   res.json({
+  tasks,
+  total,
+  totalPages: Math.ceil(total / limit),
+  currentPage: page,
+});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 //posting proposals 
 app.post("/proposals", async (req, res) => {
@@ -881,7 +914,32 @@ app.get("/users/profile/:email", async (req, res) => {
 
   res.json(user || {});
 });
+//get each user profile 
+app.get("/users/me", requireAuth, async (req, res) => {
+  try {
+    const email = req.user.email;
 
+    const user = await usersCollection.findOne(
+      { email },
+      {
+        projection: {
+          name: 1,
+          email: 1,
+          image: 1,
+          role: 1,
+        },
+      }
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 //getting all freelancers
 app.get("/freelancers", async (req, res) => {
   try {
