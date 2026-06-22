@@ -185,9 +185,9 @@ app.get("/top-freelancers", async (req, res) => {
   }
 });
     //for posting tasks
-    app.post("/tasks", async (req, res) => {
+    app.post("/tasks", requireAuth, async (req, res) => {
   try {
-    const { title, category, description, budget, deadline, userId } = req.body;
+    const { title, category, description, budget, deadline } = req.body;
 
     if (!title || !category || !description || !budget || !deadline) {
       return res.status(400).json({ error: "All fields are required" });
@@ -195,14 +195,16 @@ app.get("/top-freelancers", async (req, res) => {
 
    const newTask = {
   title,
-   category: category.trim(), 
+  category: category.trim(),
   description,
   budget: Number(budget),
   deadline,
 
-  userId,
-    clientName: req.body.clientName,
-  clientEmail: req.body.clientEmail,
+  // 🔥 USE ID
+  userId: req.user.id,
+
+  clientEmail: req.user.email,
+  clientName: req.user.name || "Unknown",
 
   status: "open",
   createdAt: new Date(),
@@ -221,7 +223,7 @@ app.get("/top-freelancers", async (req, res) => {
 });
 
 //delete tasks
-app.delete("/tasks/:id", async (req, res) => {
+app.delete("/tasks/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -234,6 +236,11 @@ app.delete("/tasks/:id", async (req, res) => {
         error: "Task not found",
       });
     }
+    if (task.userId !== req.user.id) {
+  return res.status(403).json({
+    error: "You can only delete your own tasks",
+  });
+}
 
    if (task.status !== "open") {
   return res.status(400).json({
@@ -255,7 +262,7 @@ const result = await tasksCollection.deleteOne({
 
 
 //updating tasks
-app.patch("/tasks/:id", async (req, res) => {
+app.patch("/tasks/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
 const task = await tasksCollection.findOne({
@@ -267,7 +274,11 @@ if (!task) {
     error: "Task not found",
   });
 }
-
+if (task.userId !== req.user.id) {
+  return res.status(403).json({
+    error: "Forbidden",
+  });
+}
 if (task.status !== "open") {
   return res.status(400).json({
     error: "Only open tasks can be edited",
@@ -339,7 +350,7 @@ app.get("/browse-tasks", async (req, res) => {
   }
 });
 //posting proposals 
-app.post("/proposals", async (req, res) => {
+app.post("/proposals", requireAuth, async (req, res) => {
   try {
   const {
   taskId,
@@ -396,9 +407,14 @@ if (!freelancerId || !freelancerEmail) {
   }
 });
 //client-stats
-app.get("/client/stats/:email", async (req, res) => {
+app.get("/client/stats/:email", requireAuth, async (req, res) => {
   try {
     const email = req.params.email;
+    if (req.user.email !== email && req.user.role !== "admin") {
+  return res.status(403).json({
+    error: "Forbidden",
+  });
+}
 
     const tasks = await tasksCollection
       .find({ clientEmail: email })
@@ -441,10 +457,27 @@ app.get("/client/stats/:email", async (req, res) => {
   }
 });
 //get proposals
-app.get("/proposals/:taskId", async (req, res) => {
+app.get("/proposals/:taskId", requireAuth, async (req, res) => {
   try {
+    const taskId = req.params.taskId;
+
+    // 1. find task
+    const task = await tasksCollection.findOne({
+      _id: new ObjectId(taskId),
+    });
+
+    if (!task) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    // 2. only task owner can see proposals
+    if (task.clientEmail !== req.user.email) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    // 3. get proposals
     const proposals = await proposalsCollection
-      .find({ taskId: req.params.taskId })
+      .find({ taskId })
       .toArray();
 
     res.json(proposals);
@@ -707,9 +740,14 @@ app.get("/payments/freelancer/:email", async (req, res) => {
 });
 
 //for freelancer stat
-app.get("/freelancer/stats/:email", async (req, res) => {
+app.get("/freelancer/stats/:email", requireAuth, async (req, res) => {
   try {
     const email = req.params.email;
+
+    // 🔐 ownership check
+    if (req.user.email !== email && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
     const proposals = await proposalsCollection
       .find({ freelancerEmail: email })
@@ -727,52 +765,38 @@ app.get("/freelancer/stats/:email", async (req, res) => {
       (sum, p) => sum + Number(p.amount || 0),
       0
     );
-const allMonths = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
 
-const currentMonth = new Date().getMonth(); // June = 5
+    const allMonths = [
+      "Jan","Feb","Mar","Apr","May","Jun",
+      "Jul","Aug","Sep","Oct","Nov","Dec",
+    ];
 
-const months = allMonths.slice(0, currentMonth + 1);
+    const currentMonth = new Date().getMonth();
+    const months = allMonths.slice(0, currentMonth + 1);
 
-const monthlyEarnings = {};
+    const monthlyEarnings = {};
 
-earnings.forEach((payment) => {
-  const month = new Date(payment.paidAt).toLocaleString(
-    "default",
-    {
-      month: "short",
-    }
-  );
+    earnings.forEach((payment) => {
+      const month = new Date(payment.paidAt).toLocaleString("default", {
+        month: "short",
+      });
 
-  monthlyEarnings[month] =
-    (monthlyEarnings[month] || 0) +
-    Number(payment.amount);
-});
+      monthlyEarnings[month] =
+        (monthlyEarnings[month] || 0) + Number(payment.amount);
+    });
 
-const chartData = months.map((month) => ({
-  month,
-  earnings: monthlyEarnings[month] || 0,
-}));
+    const chartData = months.map((month) => ({
+      month,
+      earnings: monthlyEarnings[month] || 0,
+    }));
 
-   res.json({
-  totalProposals: total,
-  pendingProposals: pending,
-  acceptedProposals: accepted,
-  totalEarnings,
-  chartData,
-});
+    res.json({
+      totalProposals: total,
+      pendingProposals: pending,
+      acceptedProposals: accepted,
+      totalEarnings,
+      chartData,
+    });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
