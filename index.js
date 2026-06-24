@@ -44,7 +44,7 @@ const requireAdmin = (req, res, next) => {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+   // await client.connect();
 
     const database = client.db("aligntask_db")
     const tasksCollection = database.collection("tasks")
@@ -610,9 +610,10 @@ app.get("/tasks/:id", async (req, res) => {
 });
 
 //for payment/checkout
-app.post("/create-checkout-session", async (req, res) => {
+app.post("/create-checkout-session", requireAuth, async (req, res) => {
   try {
-    const { proposalId, amount, clientEmail } = req.body;
+    const { proposalId, amount } = req.body;
+    const clientEmail = req.user.email;
 
    const session = await stripe.checkout.sessions.create({
   payment_method_types: ["card"],
@@ -816,9 +817,9 @@ app.get("/proposals/freelancer/:email", async (req, res) => {
 });
 
 //show active projects 
-app.get("/freelancer/active-projects/:email", async (req, res) => {
+app.get("/freelancer/active-projects/:email", requireAuth, async (req, res) => {
   try {
-    const email = req.params.email;
+    const email = req.user.email;
 
     // 1. get accepted proposals
     const proposals = await proposalsCollection.find({
@@ -1211,7 +1212,7 @@ app.get("/users/status/:email", async (req, res) => {
   });
 });
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+   // await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error
